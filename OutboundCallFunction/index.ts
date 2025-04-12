@@ -44,6 +44,9 @@ const cancelLabel = `Cancel`;
 const waitLabel = `Wait`;
 const retryContext = `Retry`;
 
+console.log("Starting OutboundCallFunction...");
+console.log("Environment variables loaded.");
+
 async function createAcsClient(): Promise<void> {
   if (!acsClient) {
     const connectionString = process.env.CONNECTION_STRING || "";
