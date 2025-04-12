@@ -92,4 +92,4 @@ jobs:
           app-name: 'acs-outboundv2'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_252078F4C6044536BB38C08443C7EA43 }}
           package: '.' 
-          sku: 'flexconsumption'
+          # sku: 'flexconsumption'
