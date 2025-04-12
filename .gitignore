@@ -8,7 +8,7 @@ node_modules/
 .env
 
 # Ignore build output directory
-dist/
+# dist/
 build/
 public/assets/
 
