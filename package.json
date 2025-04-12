@@ -4,7 +4,7 @@
     "description": "Azure Function for outbound calling with ACS",
     "main": "dist/index.js",
     "scripts": {
-      "build": "tsc",
+      "build": "tsc && cp OutboundCallFunction/function.json dist/OutboundCallFunction/",
       "start": "func start",
       "dev": "nodemon --exec func start" 
     },
