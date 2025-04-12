@@ -15,40 +15,53 @@ jobs:
       contents: read
 
     steps:
+      # Step A) Check out code
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      # Step B) Set up Node
       - name: Set up Node
         uses: actions/setup-node@v3
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # 1) Install dependencies at the root (where package.json is)
+      # Step C) Install dependencies in root
       - name: Install dependencies
         run: npm install
 
-      # 2) Build => compiles TS + copies function.json => dist/OutboundCallFunction/
+      # Step D) Build => TypeScript => dist/OutboundCallFunction + copy function.json
       - name: Build
         run: npm run build
 
-      # 3) Zip only the needed artifacts. 
-      #    We EXCLUDE the raw OutboundCallFunction/ folder (with .ts) 
-      #    so the function host doesn't pick it up.
+      # Step E) Move (rename) dist/OutboundCallFunction => OutboundCallFunction
+      #         so the final folder is at the root with function.json + index.js
+      - name: Rename compiled folder
+        run: |
+          # Remove any old OutboundCallFunction folder
+          rm -rf OutboundCallFunction
+          # Move newly built code out of dist/ so Azure sees it as a direct function folder
+          mv dist/OutboundCallFunction OutboundCallFunction
+
+      # Step F) Zip
       - name: Zip artifact for deployment
         run: |
+          # We zip ONLY the final OutboundCallFunction (compiled),
+          # plus node_modules, host.json, package.json, etc.
           zip -r release.zip \
-            dist \
+            OutboundCallFunction \
             node_modules \
             host.json \
             package.json \
             package-lock.json \
             -x '*.git*' \
-               'OutboundCallFunction/*'  # <--- exclude the source folder
+               'dist/*' \
+               'OutboundCallFunction/*.ts'
           # Explanation:
-          #  - 'dist/' has your compiled JS + function.json
-          #  - 'node_modules/' has your runtime dependencies
+          #  - 'OutboundCallFunction/' now has function.json + index.js
+          #  - 'node_modules' has dependencies
           #  - 'host.json' is needed at the root
-          #  - exclude the raw OutboundCallFunction folder to avoid .ts confusion
+          #  - exclude 'dist/' if it's leftover
+          #  - exclude raw .ts if it still exists in OutboundCallFunction
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -61,14 +74,17 @@ jobs:
     needs: build
 
     steps:
+      # Step G) Download artifact
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
           name: node-app
 
+      # Step H) Unzip artifact
       - name: Unzip artifact
         run: unzip release.zip
 
+      # Step I) Deploy
       - name: 'Run Azure Functions Action'
         uses: Azure/functions-action@v1
         id: fa
