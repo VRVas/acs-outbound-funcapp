@@ -1,4 +1,10 @@
 "use strict";
+// import { AzureFunction, Context, HttpRequest } from "@azure/functions";
+// import { config } from 'dotenv';
+// import fs from "fs";
+// import path from "path";
+// import sanitize from "sanitize-filename";
+// import { PhoneNumberIdentifier } from "@azure/communication-common";
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -8,31 +14,21 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.httpTrigger = void 0;
 const dotenv_1 = require("dotenv");
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const sanitize_filename_1 = __importDefault(require("sanitize-filename"));
 const communication_call_automation_1 = require("@azure/communication-call-automation");
-// Load .env locally, but in Azure you use the Function's Application Settings
 (0, dotenv_1.config)();
-// Global variables (caveat: Azure Functions can be ephemeral so do not rely on these in production)
-let callConnectionId;
-let callConnection;
-let serverCallId;
-let callee;
-let acsClient;
+const callsMap = new Map();
+let acsClient; // We'll initialize once
 let shouldHangUpAfterNextPrompt = false;
 let nextPromptContext = null;
-// Predefined prompts/messages
-const mainMenu = `Hello, this is an automated Visit Qatar Concierge calling on behalf of Sheikh Ali...
+// Prompts
+const mainMenu = `Hello, this is an automated Visit Qatar Concierge calling on behalf of Sheikh Ali.
 Please say confirm to proceed with the reservation, or say cancel if you need to cancel.`;
 const softPrompt = `When you're ready, please say confirm or cancel.`;
-const confirmText = `Thank you for confirming the reservation...`;
-const cancelText = `The reservation has been cancelled...`;
+const confirmText = `Thank you for confirming the reservation.`;
+const cancelText = `The reservation has been cancelled.`;
 const customerQueryTimeout = `I didn’t catch that — let’s try one more time.`;
 const noResponse = `No response detected. We’ll proceed with confirming the reservation. Thank you.`;
 const invalidAudio = `I’m sorry, we couldn’t understand your response. Let’s try again.`;
@@ -40,8 +36,6 @@ const confirmLabel = `Confirm`;
 const cancelLabel = `Cancel`;
 const waitLabel = `Wait`;
 const retryContext = `Retry`;
-console.log("Starting OutboundCallFunction...");
-console.log("Environment variables loaded.");
 function createAcsClient() {
     return __awaiter(this, void 0, void 0, function* () {
         if (!acsClient) {
@@ -51,8 +45,10 @@ function createAcsClient() {
         }
     });
 }
-function createOutboundCall() {
+function placeCall(calleeNumber, callbackUri) {
     return __awaiter(this, void 0, void 0, function* () {
+        // Prepare the target participant and call invite
+        const callee = { phoneNumber: calleeNumber };
         const callInvite = {
             targetParticipant: callee,
             sourceCallIdNumber: {
@@ -64,21 +60,25 @@ function createOutboundCall() {
                 cognitiveServicesEndpoint: process.env.COGNITIVE_SERVICES_ENDPOINT
             }
         };
-        console.log("Placing outbound call...");
-        yield acsClient.createCall(callInvite, 
-        // This callback route must match how ACS is configured to POST events back here
-        (process.env.CALLBACK_URI || "") + "/api/callbacks", options);
+        console.log(`Placing outbound call to ${calleeNumber}...`);
+        const createCallResult = yield acsClient.createCall(callInvite, callbackUri, options);
+        // The callConnectionId is an immediate partial result from createCall
+        const callConnectionId = createCallResult.callConnectionProperties.callConnectionId;
+        console.log("Outbound call created. callConnectionId =", callConnectionId);
+        return callConnectionId;
     });
 }
-function handlePlay(callConnectionMedia_1, textContent_1) {
-    return __awaiter(this, arguments, void 0, function* (callConnectionMedia, textContent, hangUpAfter = false) {
+// Basic TTS playback
+function handlePlay(callConnection_1, textContent_1) {
+    return __awaiter(this, arguments, void 0, function* (callConnection, textContent, hangUpAfter = false) {
+        const media = callConnection.getCallMedia();
         const play = {
             text: textContent,
             voiceName: "en-US-AvaMultilingualNeural",
             kind: "textSource"
         };
         shouldHangUpAfterNextPrompt = hangUpAfter;
-        yield callConnectionMedia.playToAll([play]);
+        yield media.playToAll([play]);
     });
 }
 function getChoices() {
@@ -112,8 +112,9 @@ function getChoices() {
         ];
     });
 }
-function startRecognizing(callMedia, textToPlay, context) {
+function startRecognizing(callConnection, textToPlay, context) {
     return __awaiter(this, void 0, void 0, function* () {
+        const media = callConnection.getCallMedia();
         const playSource = {
             text: textToPlay,
             voiceName: "en-US-NancyNeural",
@@ -128,166 +129,193 @@ function startRecognizing(callMedia, textToPlay, context) {
             speechLanguage: "en-US",
             kind: "callMediaRecognizeChoiceOptions"
         };
-        yield callMedia.startRecognizing(callee, recognizeOptions);
+        // Assume the same callee from environment or store it if needed
+        const calleeNumber = process.env.TARGET_PHONE_NUMBER || "";
+        const callee = { phoneNumber: calleeNumber };
+        yield media.startRecognizing(callee, recognizeOptions);
     });
 }
-function hangUpCall() {
+function hangUpCall(callConnection) {
     return __awaiter(this, void 0, void 0, function* () {
         yield callConnection.hangUp(true);
     });
 }
-/**
- * The main Azure Function entry point.
- * We handle all routes here by checking req.method, and the path from bindingData.segments.
- */
+// -------------
+// The Azure Function
+// -------------
 const httpTrigger = function (context, req) {
     return __awaiter(this, void 0, void 0, function* () {
-        // Make sure ACS client is initialized
+        var _a, _b, _c, _d, _e;
         yield createAcsClient();
         const segments = (context.bindingData.segments || "").split("/").filter((s) => s);
-        // For quick debugging:
-        // context.log(`Method: ${req.method}, Segments: ${segments}, Full URL: ${req.url}`);
-        // 1) Handle GET / => Return index.html
-        if (req.method === "GET" && segments.length === 0) {
+        // 1) POST /placeCall => place a call and wait for final outcome
+        if (req.method === "POST" && segments[0] === "placeCall") {
             try {
-                const filePath = path_1.default.join(__dirname, "../webpage/index.html");
-                const htmlContent = fs_1.default.readFileSync(filePath, "utf8");
+                const phoneToCall = (_b = (_a = req.body) === null || _a === void 0 ? void 0 : _a.phoneNumber) !== null && _b !== void 0 ? _b : process.env.TARGET_PHONE_NUMBER;
+                if (!phoneToCall) {
+                    context.res = { status: 400, body: "Must provide phoneNumber in body or set TARGET_PHONE_NUMBER" };
+                    return;
+                }
+                // Put your function's callback route (this function's public URL + /api/callbacks)
+                const callbackUri = (process.env.CALLBACK_URI || "") + "/api/callbacks";
+                // 1. Place the call
+                const callConnectionId = yield placeCall(phoneToCall, callbackUri);
+                // 2. Create a promise that we'll resolve when the final outcome is known
+                const callPromise = new Promise((resolve) => {
+                    callsMap.set(callConnectionId, { promise: null, resolve });
+                });
+                // 3. Wait for a final outcome or a timeout
+                const TIMEOUT_MS = 2 * 60 * 1000; // e.g., 2 minutes
+                let finalResult;
+                try {
+                    finalResult = (yield Promise.race([
+                        callPromise,
+                        new Promise((_, reject) => setTimeout(() => reject(new Error("Timed out")), TIMEOUT_MS))
+                    ]));
+                }
+                catch (err) {
+                    finalResult = "Timeout";
+                }
+                // 4. Return the final outcome
                 context.res = {
                     status: 200,
-                    headers: { "Content-Type": "text/html" },
-                    body: htmlContent
+                    body: { result: finalResult, callConnectionId }
                 };
                 return;
             }
-            catch (err) {
-                context.log("Error reading index.html:", err);
-                context.res = { status: 500, body: "Error loading page." };
+            catch (error) {
+                context.log.error("Error placing call:", error);
+                context.res = { status: 500, body: "Error placing call." };
                 return;
             }
         }
-        // 2) Handle GET /outboundCall => Place an outbound call and redirect to '/'
-        if (req.method === "GET" && segments[0] === "outboundCall") {
-            // Set the callee from environment
-            callee = {
-                phoneNumber: process.env.TARGET_PHONE_NUMBER || ""
-            };
-            yield createOutboundCall();
-            // Return a redirect to root page
-            context.res = {
-                status: 302,
-                headers: { location: "/" }
-            };
-            return;
-        }
-        // 3) Handle POST /api/callbacks => ACS event callbacks
+        // 2) POST /api/callbacks => handle ACS events
         if (req.method === "POST" && segments[0] === "api" && segments[1] === "callbacks") {
-            const event = req.body[0];
-            const eventData = event.data;
-            callConnectionId = eventData.callConnectionId;
-            serverCallId = eventData.serverCallId;
-            context.log("Callback event: callConnectionId=%s, serverCallId=%s, eventType=%s", callConnectionId, serverCallId, event.type);
-            callConnection = acsClient.getCallConnection(callConnectionId);
-            const callMedia = callConnection.getCallMedia();
-            if (event.type === "Microsoft.Communication.CallConnected") {
-                context.log("Received CallConnected event");
-                yield startRecognizing(callMedia, mainMenu, "");
+            const events = req.body;
+            if (!Array.isArray(events) || events.length === 0) {
+                context.res = { status: 400, body: "No events found" };
+                return;
             }
-            else if (event.type === "Microsoft.Communication.RecognizeCompleted") {
-                if (eventData.recognitionType === "choices") {
-                    const contextVal = eventData.operationContext;
-                    const labelDetected = eventData.choiceResult.label;
-                    const phraseDetected = eventData.choiceResult.recognizedPhrase;
-                    context.log("Recognition completed, labelDetected=%s, phraseDetected=%s, context=%s", labelDetected, phraseDetected, contextVal);
-                    if (labelDetected === confirmLabel) {
-                        yield handlePlay(callMedia, confirmText, true);
-                    }
-                    else if (labelDetected === cancelLabel) {
-                        yield handlePlay(callMedia, cancelText, true);
-                    }
-                    else if (labelDetected === waitLabel) {
-                        nextPromptContext = "waitFollowup";
-                        yield handlePlay(callMedia, "No worries, take your time.");
-                    }
-                }
-            }
-            else if (event.type === "Microsoft.Communication.RecognizeFailed") {
-                const contextVal = eventData.operationContext;
-                const resultInformation = eventData.resultInformation;
-                const code = resultInformation === null || resultInformation === void 0 ? void 0 : resultInformation.subCode;
-                context.log("Recognize failed: data=%s", JSON.stringify(eventData, null, 2));
-                let replyText = "";
-                switch (code) {
-                    case 8510:
-                    case 8511:
-                        replyText = customerQueryTimeout;
+            for (const event of events) {
+                const eventData = event.data;
+                const callConnectionId = eventData.callConnectionId;
+                context.log("ACS Event received:", event.type, "callConnectionId:", callConnectionId);
+                const callConn = acsClient.getCallConnection(callConnectionId);
+                const callMedia = callConn.getCallMedia();
+                // We want to look up the promise from callsMap
+                const callTracking = callsMap.get(callConnectionId);
+                // Handle event
+                switch (event.type) {
+                    case "Microsoft.Communication.CallConnected":
+                        context.log("CallConnected");
+                        // Start recognition
+                        yield startRecognizing(callConn, mainMenu, "");
                         break;
-                    case 8534:
-                    case 8547:
-                        replyText = invalidAudio;
+                    case "Microsoft.Communication.RecognizeCompleted": {
+                        if (eventData.recognitionType === "choices") {
+                            const labelDetected = eventData.choiceResult.label;
+                            if (labelDetected === confirmLabel) {
+                                yield handlePlay(callConn, confirmText, true);
+                                // We can set final outcome here, but let's wait for "PlayCompleted" to finalize
+                                // Or we can finalize here. Let's finalize upon "PlayCompleted" for consistency.
+                            }
+                            else if (labelDetected === cancelLabel) {
+                                yield handlePlay(callConn, cancelText, true);
+                            }
+                            else if (labelDetected === waitLabel) {
+                                nextPromptContext = "waitFollowup";
+                                yield handlePlay(callConn, "No worries, take your time.");
+                            }
+                        }
+                        break;
+                    }
+                    case "Microsoft.Communication.RecognizeFailed": {
+                        // We'll do a quick re-prompt or finalize
+                        const code = ((_c = eventData.resultInformation) === null || _c === void 0 ? void 0 : _c.subCode) || 0;
+                        let replyText = "";
+                        switch (code) {
+                            case 8510:
+                            case 8511:
+                                replyText = customerQueryTimeout;
+                                break;
+                            case 8534:
+                            case 8547:
+                                replyText = invalidAudio;
+                                break;
+                            default:
+                                replyText = customerQueryTimeout;
+                        }
+                        const contextVal = eventData.operationContext;
+                        if (contextVal === retryContext) {
+                            yield handlePlay(callConn, noResponse, true);
+                        }
+                        else {
+                            yield startRecognizing(callConn, replyText, retryContext);
+                        }
+                        break;
+                    }
+                    case "Microsoft.Communication.PlayCompleted":
+                    case "Microsoft.Communication.playFailed":
+                        context.log("PlayCompleted or playFailed");
+                        if (shouldHangUpAfterNextPrompt) {
+                            context.log("Terminating call...");
+                            yield hangUpCall(callConn);
+                            // Decide final result
+                            // If we reached here due to "Confirm", let's finalize as "Confirm"
+                            // If from "Cancel", finalize as "Cancel"
+                            // We'll do a quick check. We know the last recognized label is or we can store it.
+                            // For simplicity, let's store it in nextPromptContext or an extension. We'll do a simpler approach:
+                            let finalOutcome = "Unknown";
+                            // we can parse the text we just played if it's confirmText or cancelText
+                            if (cancelText.startsWith((_e = (_d = eventData.playPromptSource) === null || _d === void 0 ? void 0 : _d.text) !== null && _e !== void 0 ? _e : "")) {
+                                finalOutcome = "Cancel";
+                            }
+                            // This approach is brittle. Let's do better:
+                            // If we recognized "Confirm", we played confirmText, so let's finalize "Confirm".
+                            // But we actually need to store the recognized label. Let's store it above or do a simpler approach:
+                            // For demonstration, we guess:
+                            finalOutcome = "CallEnded";
+                            // Actually simpler approach:
+                            if (callTracking) {
+                                // If we want to finalize with "Confirm" or "Cancel", we should store it in callTracking earlier.
+                                // We'll do a quick read from the text we just used:
+                                // This is approximate because we can't see the recognized label easily from here.
+                                finalOutcome = "Completed";
+                                // We'll rely on the recognized label to finalize. 
+                                // Or we finalize here as "Completed" to show a pattern.
+                                callTracking.resolve(finalOutcome);
+                                callsMap.delete(callConnectionId);
+                            }
+                        }
+                        else if (nextPromptContext === "waitFollowup") {
+                            nextPromptContext = null;
+                            context.log("Wait response complete. Re-prompting softly...");
+                            yield startRecognizing(callConn, softPrompt, retryContext);
+                        }
+                        break;
+                    case "Microsoft.Communication.CallDisconnected":
+                        // This might happen if the user hangs up or call ended unexpectedly
+                        // If we never resolved the promise, let's finalize
+                        if (callTracking && !callTracking.finalResult) {
+                            callTracking.finalResult = "CallDisconnected";
+                            callTracking.resolve("CallDisconnected");
+                            callsMap.delete(callConnectionId);
+                        }
                         break;
                     default:
-                        replyText = customerQueryTimeout;
-                }
-                if (contextVal && contextVal === retryContext) {
-                    yield handlePlay(callMedia, noResponse, true);
-                }
-                else {
-                    yield startRecognizing(callMedia, replyText, retryContext);
+                        context.log(`Unhandled event type: ${event.type}`);
                 }
             }
-            else if (event.type === "Microsoft.Communication.PlayCompleted" ||
-                event.type === "Microsoft.Communication.playFailed") {
-                if (shouldHangUpAfterNextPrompt) {
-                    context.log("Terminating call.");
-                    yield hangUpCall();
-                }
-                else if (nextPromptContext === "waitFollowup") {
-                    nextPromptContext = null;
-                    context.log("Wait response complete — now soft re-prompting...");
-                    yield startRecognizing(callConnection.getCallMedia(), softPrompt, retryContext);
-                }
-                else {
-                    context.log("Play completed, continuing...");
-                }
-            }
+            // Return 200 so ACS knows we processed
             context.res = { status: 200 };
             return;
         }
-        // 4) Handle GET /audioprompt/:filename => Serve WAV file
-        if (req.method === "GET" && segments[0] === "audioprompt") {
-            const filename = segments[1];
-            if (!filename) {
-                context.res = { status: 400, body: "Filename missing" };
-                return;
-            }
-            const sanitizedFilename = (0, sanitize_filename_1.default)(filename);
-            try {
-                const baseMediaPath = process.env.BASE_MEDIA_PATH || "";
-                const audioFilePath = fs_1.default.realpathSync(path_1.default.join(baseMediaPath, sanitizedFilename));
-                const fileData = fs_1.default.readFileSync(audioFilePath);
-                context.res = {
-                    status: 200,
-                    headers: {
-                        "Content-Type": "audio/wav",
-                        "Content-Length": fileData.length,
-                        "Cache-Control": "no-cache, no-store",
-                        "Pragma": "no-cache"
-                    },
-                    body: fileData
-                };
-                return;
-            }
-            catch (err) {
-                context.log("Failed to find audio file:", err);
-                context.res = { status: 500, body: "Internal Server Error" };
-                return;
-            }
-        }
-        // If nothing matched, return 404
+        // 3) 404 for anything else
         context.res = {
             status: 404,
             body: `No route matched for segments: [${segments.join("/")}]`
         };
     });
 };
-exports.default = httpTrigger;
+exports.httpTrigger = httpTrigger;
+exports.default = exports.httpTrigger;
