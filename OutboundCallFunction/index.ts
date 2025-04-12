@@ -320,7 +320,7 @@
 // export default httpTrigger;
 
 import { AzureFunction, Context, HttpRequest } from "@azure/functions";
-import { config } from "dotenv";
+// import { config } from "dotenv";
 import {
   PhoneNumberIdentifier
 } from "@azure/communication-common";
@@ -336,7 +336,7 @@ import {
   DtmfTone
 } from "@azure/communication-call-automation";
 
-config();
+// config();
 
 // ----------------------
 // GLOBAL (EPHEMERAL) STATE

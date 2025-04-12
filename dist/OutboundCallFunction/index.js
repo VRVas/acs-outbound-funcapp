@@ -16,9 +16,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.httpTrigger = void 0;
-const dotenv_1 = require("dotenv");
 const communication_call_automation_1 = require("@azure/communication-call-automation");
-(0, dotenv_1.config)();
 const callsMap = new Map();
 let acsClient; // We'll initialize once
 let shouldHangUpAfterNextPrompt = false;
