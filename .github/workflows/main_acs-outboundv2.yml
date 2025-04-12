@@ -64,7 +64,7 @@ jobs:
         id: fa
         with:
           app-name: 'acs-outboundv2'
-          slot-name: 'Production'
+          # slot-name: 'Production'
           package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_252078F4C6044536BB38C08443C7EA43 }}
           sku: 'flexconsumption'
