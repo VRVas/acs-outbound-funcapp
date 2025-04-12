@@ -1,0 +1,91 @@
+name: Build and deploy Node.js project to Azure Function App - acs-outboundv3
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# We define the environment variables for Node version and package path
+env:
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.'  # We'll deploy from the current folder after unzipping
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # needed to check out the repo
+
+    steps:
+      # 1) Check out the code
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 2) Set up Node.js
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # 3) Install dependencies at the root (where package.json is)
+      - name: 'Resolve Project Dependencies Using Npm'
+        shell: bash
+        run: |
+          npm install
+          npm run build --if-present
+          # If you have tests, you can also run:
+          # npm run test --if-present
+
+      # 4) Move (rename) dist/OutboundCallFunction => OutboundCallFunction
+      #    so the final folder at root has function.json + index.js
+      - name: Rename compiled folder
+        run: |
+          rm -rf OutboundCallFunction
+          mv dist/OutboundCallFunction OutboundCallFunction
+
+      # 5) Zip only the needed artifacts for deployment
+      - name: Zip artifact for deployment
+        run: |
+          zip -r release.zip \
+            OutboundCallFunction \
+            node_modules \
+            host.json \
+            package.json \
+            package-lock.json \
+            -x '*.git*' \
+               'dist/*' \
+               'OutboundCallFunction/*.ts'
+
+      # 6) Upload artifact for the "deploy" job
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-app
+          path: release.zip
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      # 1) Download the artifact from the "build" job
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: node-app
+
+      # 2) Unzip the package
+      - name: Unzip artifact
+        run: unzip release.zip
+
+      # 3) Deploy to Azure Functions
+      - name: 'Run Azure Functions Action'
+        uses: Azure/functions-action@v1
+        id: fa
+        with:
+          app-name: 'acs-outboundv3'
+          # slot-name: 'Production'
+          publish-profile: ${{ secrets.AzureAppService_PublishProfile_e7da47a509ab4b97ba9755302c68f9da }}
+          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          # If you want to specify the SKU for Premium (e.g. EP1), add:
+          # sku: 'EP1'
