@@ -5,46 +5,43 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-# We define the environment variables for Node version and package path
 env:
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.'  # We'll deploy from the current folder after unzipping
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.'
   NODE_VERSION: '20'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read  # needed to check out the repo
+      contents: read
 
     steps:
-      # 1) Check out the code
+      # 1) Check out
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 2) Set up Node.js
+      # 2) Set up Node
       - name: Setup Node ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v3
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # 3) Install dependencies at the root (where package.json is)
-      - name: 'Resolve Project Dependencies Using Npm'
-        shell: bash
+      # 3) Install dependencies + build
+      - name: 'Install + Build'
         run: |
           npm install
           npm run build --if-present
-          # If you have tests, you can also run:
+          # If you want tests:
           # npm run test --if-present
 
-      # 4) Move (rename) dist/OutboundCallFunction => OutboundCallFunction
-      #    so the final folder at root has function.json + index.js
+      # 4) Rename dist/OutboundCallFunction => OutboundCallFunction
       - name: Rename compiled folder
         run: |
           rm -rf OutboundCallFunction
           mv dist/OutboundCallFunction OutboundCallFunction
 
-      # 5) Zip only the needed artifacts for deployment
-      - name: Zip artifact for deployment
+      # 5) Zip for deployment
+      - name: Zip artifact
         run: |
           zip -r release.zip \
             OutboundCallFunction \
@@ -56,8 +53,8 @@ jobs:
                'dist/*' \
                'OutboundCallFunction/*.ts'
 
-      # 6) Upload artifact for the "deploy" job
-      - name: Upload artifact for deployment job
+      # 6) Upload artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: node-app
@@ -68,24 +65,28 @@ jobs:
     needs: build
 
     steps:
-      # 1) Download the artifact from the "build" job
-      - name: Download artifact from build job
+      # 1) Download artifact from build job
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: node-app
 
-      # 2) Unzip the package
+      # 2) Unzip
       - name: Unzip artifact
         run: unzip release.zip
 
-      # 3) Deploy to Azure Functions
-      - name: 'Run Azure Functions Action'
+      # 3) Azure login (Publish Profile)
+      - name: 'Login via Azure CLI'
+        uses: azure/login@v1
+        with:
+          publish-profile: ${{ secrets.AzureAppService_PublishProfile_e7da47a509ab4b97ba9755302c68f9da }}
+
+      # 4) Deploy with Azure Functions Action
+      - name: 'Deploy to Azure Functions'
         uses: Azure/functions-action@v1
-        id: fa
         with:
           app-name: 'acs-outboundv3'
-          # slot-name: 'Production'
-          publish-profile: ${{ secrets.AzureAppService_PublishProfile_e7da47a509ab4b97ba9755302c68f9da }}
+          slot-name: 'Production'
           package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-          # If you want to specify the SKU for Premium (e.g. EP1), add:
-          # sku: 'EP1'
+          # If you prefer, you can remove the 'publish-profile' here since we did azure/login above
+          # publish-profile: ${{ secrets.AzureAppService_PublishProfile_e7da47a509ab4b97ba9755302c68f9da }}
