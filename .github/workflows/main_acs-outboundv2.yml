@@ -1,6 +1,75 @@
 # Docs for the Azure Web Apps Deploy action: https://github.com/azure/functions-action
 # More GitHub Actions for Azure: https://github.com/Azure/actions
 
+# name: Build and deploy Node.js project to Azure Function App - acs-outboundv2
+
+# on:
+#   push:
+#     branches:
+#       - main
+#   workflow_dispatch:
+
+# env:
+#   AZURE_FUNCTIONAPP_PACKAGE_PATH: './dist' # set this to the path to your web app project, defaults to the repository root
+#   NODE_VERSION: '20' # set this to the node version to use (supports 8.x, 10.x, 12.x)
+
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
+#     permissions:
+#       contents: read #This is required for actions/checkout
+
+#     steps:
+#       - name: 'Checkout GitHub Action'
+#         uses: actions/checkout@v4
+
+#       - name: Setup Node ${{ env.NODE_VERSION }} Environment
+#         uses: actions/setup-node@v3
+#         with:
+#           node-version: ${{ env.NODE_VERSION }}
+
+#       - name: 'Resolve Project Dependencies Using Npm'
+#         shell: bash
+#         run: |
+#           pushd './${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}'
+#           npm install
+#           npm run build --if-present
+#           npm run test --if-present
+#           popd
+
+#       - name: Zip artifact for deployment
+#         run: zip release.zip ./* -r
+
+#       - name: Upload artifact for deployment job
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: node-app
+#           path: release.zip
+
+#   deploy:
+#     runs-on: ubuntu-latest
+#     needs: build
+    
+#     steps:
+#       - name: Download artifact from build job
+#         uses: actions/download-artifact@v4
+#         with:
+#           name: node-app
+
+#       - name: Unzip artifact for deployment
+#         run: unzip release.zip
+      
+#       - name: 'Run Azure Functions Action'
+#         uses: Azure/functions-action@v1
+#         id: fa
+#         with:
+#           app-name: 'acs-outboundv2'
+#           # slot-name: 'Production'
+#           package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+#           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_252078F4C6044536BB38C08443C7EA43 }}
+#           sku: 'flexconsumption'
+        
+
 name: Build and deploy Node.js project to Azure Function App - acs-outboundv2
 
 on:
@@ -10,17 +79,17 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: './dist' # set this to the path to your web app project, defaults to the repository root
-  NODE_VERSION: '20' # set this to the node version to use (supports 8.x, 10.x, 12.x)
+  NODE_VERSION: '20'  # your Node version
+  # We'll define the final output folder as 'dist', but you can rename if you want
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read
 
     steps:
-      - name: 'Checkout GitHub Action'
+      - name: Checkout GitHub Action
         uses: actions/checkout@v4
 
       - name: Setup Node ${{ env.NODE_VERSION }} Environment
@@ -28,17 +97,31 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: 'Resolve Project Dependencies Using Npm'
-        shell: bash
-        run: |
-          pushd './${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}'
-          npm install
-          npm run build --if-present
-          npm run test --if-present
-          popd
+      # 1) Install dependencies at the root (where package.json is)
+      - name: Install dependencies
+        run: npm install
 
+      # 2) Build TypeScript => produces dist/OutboundCallFunction/index.js
+      - name: Build
+        run: npm run build
+
+      # 3) Zip artifacts:
+      #    - dist/ (compiled code)
+      #    - node_modules/ (so that @azure/communication-call-automation is included)
+      #    - host.json
+      #    - package.json, package-lock.json (optional but recommended)
+      #    - any function folder that might hold other files
       - name: Zip artifact for deployment
-        run: zip release.zip ./* -r
+        run: |
+          zip -r release.zip \
+            dist \
+            node_modules \
+            host.json \
+            package.json \
+            package-lock.json \
+            OutboundCallFunction \
+            -x '*.git*'  # exclude .git, etc. if you want
+          # ^ This ensures node_modules + your dist + function config are in the zip
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -49,7 +132,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    
+
     steps:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
@@ -58,14 +141,14 @@ jobs:
 
       - name: Unzip artifact for deployment
         run: unzip release.zip
-      
+
       - name: 'Run Azure Functions Action'
         uses: Azure/functions-action@v1
         id: fa
         with:
           app-name: 'acs-outboundv2'
-          # slot-name: 'Production'
-          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_252078F4C6044536BB38C08443C7EA43 }}
+          # If you're truly on flex consumption, keep it
           sku: 'flexconsumption'
-        
+          # No slot-name unless you have a custom slot
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_252078F4C6044536BB38C08443C7EA43 }}
+          package: '.'  # We unzipped in the current folder
